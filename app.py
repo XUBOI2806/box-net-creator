@@ -3,6 +3,44 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import sys
+from pathlib import Path
+import shutil
+
+def get_inkscape_path():
+    # 1. If running as a bundled EXE (PyInstaller)
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+        bundled = base / "resources" / "Inkscape" / "bin" / "inkscape.exe"
+        if bundled.exists():
+            return str(bundled)
+
+    # 2. If running from source
+    dev_path = Path(__file__).parent / "resources" / "Inkscape" / "bin" / "inkscape.exe"
+    if dev_path.exists():
+        return str(dev_path)
+
+    # 3. Fallback to system PATH
+    system = shutil.which("inkscape")
+    if system:
+        return system
+
+    return None
+
+INKSCAPE = get_inkscape_path()
+
+if not INKSCAPE:
+    st.error(
+        "Inkscape not found.\n\n"
+        "Please make sure the 'resources/Inkscape' folder is present or Inkscape is installed system-wide."
+    )
+    st.stop()
+
+def tab_size(value, base):
+    if value == "H":
+        return base * 2
+    return base
+
 # ---------- SVG GENERATOR ----------
 def generate_box_sheet_svg(boxes, spacing=1000, scale=0.1, left_margin=100):
     def rect(x, y, w, h, stroke="red"):
@@ -15,9 +53,18 @@ def generate_box_sheet_svg(boxes, spacing=1000, scale=0.1, left_margin=100):
     def line(x1, y1, x2, y2, color="red", stroke_width=1):
         return f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{color}" stroke-width="{stroke_width}" />'
 
+    def tab_size(value, base):
+        if value == "H":
+            return base * 2
+        return base
+
+    # --- Calculate max left tab to shift all boxes right ---
+    max_left_tab = max(tab_size(box.get("left"), box["side"]) for box in boxes) if boxes else 0
+    shift_x = max_left_tab + left_margin
+
     elements = []
 
-    x_offset = left_margin
+    x_offset = 0  # start at 0, we'll shift by shift_x later
     y_offset = 0
     max_row_height = 0
     columns = 4
@@ -29,51 +76,50 @@ def generate_box_sheet_svg(boxes, spacing=1000, scale=0.1, left_margin=100):
         side = box["side"] * scale
         label = box["label"]
 
-        net_w = width + 2 * side
-        net_h = length + 3 * side
+        # Calculate actual tab sizes
+        top_tab = tab_size(box.get("up"), side)
+        bottom_tab = tab_size(box.get("down"), side)
+        left_tab = tab_size(box.get("left"), side)
+        right_tab = tab_size(box.get("right"), side)
 
-        base_x = x_offset
-        base_y = y_offset + 2 * side
+        # Base position
+        base_x = x_offset + 50
+        base_y = y_offset + 2 * side + 20
+
+        net_w = width + left_tab + right_tab
+        net_h = length + top_tab + bottom_tab
 
         # --- Box + tabs ---
         elements += [
             rect(base_x, base_y, width, length),
-            rect(base_x, base_y - side, width, side),
-            rect(base_x, base_y + length, width, side),
-            rect(base_x - side, base_y, side, length),
-            rect(base_x + width, base_y, side, length),
+            rect(base_x, base_y - top_tab, width, top_tab),           # top
+            rect(base_x, base_y + length, width, bottom_tab),         # bottom
+            rect(base_x - left_tab, base_y, left_tab, length),        # left
+            rect(base_x + width, base_y, right_tab, length),          # right
             text(base_x + width / 2, 2*(base_y + length) / 3, label, 60*scale, "blue")
         ]
 
-        # --- Middle arrow pointing up from center ---
+        # --- Middle arrow ---
         center_x = base_x + width / 2
         center_y = base_y + length / 2
-        arrow_length = 300 * scale  # tail length
+        arrow_length = 300 * scale
         arrow_head_size = 30 * scale
-
-        # Tail (line from center upwards, stopping before arrowhead)
         line_end_y = center_y - arrow_length + arrow_head_size
         elements.append(f'<line x1="{center_x}" y1="{center_y}" x2="{center_x}" y2="{line_end_y}" stroke="red" stroke-width="1"/>')
-
-        # Arrowhead
         elements.append(f'<polygon points="{center_x},{line_end_y - arrow_head_size} {center_x - arrow_head_size},{line_end_y} {center_x + arrow_head_size},{line_end_y}" fill="red"/>')
 
         # --- Inputs inside the box ---
-        # Up
         if box.get("up") and box["up"] != "None":
             elements.append(text(base_x + width/2, base_y + length*0.25, box["up"], 50*scale, "red"))
-        # Down
         if box.get("down") and box["down"] != "None":
             elements.append(text(base_x + width/2, base_y + length*0.75, box["down"], 50*scale, "red"))
-        # Left
         if box.get("left") and box["left"] != "None":
             elements.append(text(base_x + width*0.25, base_y + length/2, box["left"], 50*scale, "red"))
-        # Right
         if box.get("right") and box["right"] != "None":
             elements.append(text(base_x + width*0.75, base_y + length/2, box["right"], 50*scale, "red"))
 
         # --- Bottom measurement line ---
-        y_bottom = base_y + length + 2*side
+        y_bottom = base_y + length + bottom_tab + side
         elements.append(line(base_x, y_bottom, base_x + width, y_bottom))
         elements.append(line(base_x, y_bottom - 3, base_x, y_bottom + 3))
         elements.append(line(base_x + width, y_bottom - 3, base_x + width, y_bottom + 3))
@@ -82,7 +128,7 @@ def generate_box_sheet_svg(boxes, spacing=1000, scale=0.1, left_margin=100):
         elements.append(text(base_x + width/2, y_bottom + 10*scale + 7, f"{int(box['width'])} mm", 90*scale))
 
         # --- Left measurement line ---
-        x_left = base_x - 2*side
+        x_left = base_x - left_tab - side
         elements.append(line(x_left, base_y, x_left, base_y + length))
         elements.append(line(x_left - 3, base_y, x_left + 3, base_y))
         elements.append(line(x_left - 3, base_y + length, x_left + 3, base_y + length))
@@ -92,19 +138,19 @@ def generate_box_sheet_svg(boxes, spacing=1000, scale=0.1, left_margin=100):
 
         max_row_height = max(max_row_height, net_h)
 
-        # --- Update offsets for next box ---
+        # --- Update offsets ---
         if (i + 1) % columns == 0:
             row_widths.append(x_offset + net_w)
-            x_offset = left_margin
+            x_offset = 0
             y_offset += max_row_height + spacing*scale
             max_row_height = 0
         else:
             x_offset += net_w + spacing*scale
 
     if len(boxes) % columns != 0:
-        row_widths.append(x_offset - spacing*scale if x_offset > 0 else x_offset)
+        row_widths.append(x_offset if x_offset > 0 else 0)
 
-    canvas_width = max(row_widths) if row_widths else 500*scale
+    canvas_width = max(row_widths) + shift_x  # include left shift
     canvas_height = y_offset + max_row_height + spacing*scale
 
     return f"""
@@ -117,6 +163,7 @@ def generate_box_sheet_svg(boxes, spacing=1000, scale=0.1, left_margin=100):
 """
 
 
+
 # ---------- PDF GENERATION (SAFE) ----------
 def generate_pdf_bytes(svg_text: str) -> bytes:
     with tempfile.TemporaryDirectory() as tmp:
@@ -127,7 +174,7 @@ def generate_pdf_bytes(svg_text: str) -> bytes:
         svg_path.write_text(svg_text)
 
         subprocess.run([
-            r"E:\Program Files\Inkscape\bin\inkscape.exe",
+            INKSCAPE,
             str(svg_path),
             "--export-type=pdf",
             "--export-filename", str(pdf_path)
@@ -203,7 +250,7 @@ if st.session_state.boxes:
         svg_path.write_text(svg)
 
         subprocess.run([
-            r"E:\Program Files\Inkscape\bin\inkscape.exe",
+            INKSCAPE,
             str(svg_path),
             "--export-type=png",
             "--export-filename", str(png_path)
