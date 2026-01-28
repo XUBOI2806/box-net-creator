@@ -154,18 +154,22 @@ def generate_box_sheet_svg(boxes, spacing=1000, scale=0.1, left_margin=100):
                 tabs = tabs_for_bottom_right(base_x, base_y, width, length, ext_w, ext_l,
                                              top_tab, bottom_tab, left_tab, right_tab)
                 elements.extend(tabs)
+            # Draw main polygon
+                elements.append(polygon(main_pts))
         else:
+            main_pts = [
+                    (base_x, base_y),
+                    (base_x + width, base_y),
+                    (base_x + width, base_y + length),
+                    (base_x, base_y + length)
+                ]
             elements += [
             rect(base_x, base_y, width, length),
             rect(base_x, base_y - top_tab, width, top_tab),           # top
             rect(base_x, base_y + length, width, bottom_tab),         # bottom
             rect(base_x - left_tab, base_y, left_tab, length),        # left
             rect(base_x + width, base_y, right_tab, length),          # right
-            text(base_x + width / 2, 2*(base_y + length) / 3, label, 60*scale, "blue")
             ]
-
-        # Draw main polygon
-        elements.append(polygon(main_pts))
 
         # --- Label inside the box ---
         elements.append(text(base_x + width / 2, 2 * (base_y + length) / 3, label, 60*scale, "blue"))
@@ -328,7 +332,6 @@ st.title("📦 Box Net Creator - Inkscape Preview")
 if "boxes" not in st.session_state:
     st.session_state.boxes = []
 
-is_lshape = st.checkbox("L-shape", value=True)
 
 st.subheader("Edit / Add Box")
 
@@ -418,6 +421,34 @@ with st.form("Box Form"):
     col_save, col_delete = st.columns(2)
     save_btn = st.form_submit_button("💾 Save")
     delete_btn = st.form_submit_button("🗑️ Delete")
+
+    if save_btn:
+        box_data = {
+            "width": width,
+            "length": length,
+            "side": side,
+            "label": label_input,
+            "up": up_val,
+            "down": down_val,
+            "left": left_val,
+            "right": right_val,
+            "is_lshape": is_lshape,
+            "ext_width": ext_width,
+            "ext_length": ext_length,
+        }
+
+        if selected_index is None:
+            # ➕ New box
+            st.session_state.boxes.append(box_data)
+        else:
+            # ✏️ Update existing box
+            st.session_state.boxes[selected_index] = box_data
+
+        st.rerun()
+
+    if delete_btn and selected_index is not None:
+        st.session_state.boxes.pop(selected_index)
+        st.rerun()
 
 
 # --- Show added boxes ---
